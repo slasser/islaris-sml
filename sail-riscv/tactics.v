@@ -53,11 +53,10 @@
 (* Exceptions to this license are detailed in THIRD_PARTY_FILES.md          *)
 (****************************************************************************)
 
-Require Import Sail.Base.
-Require Import Sail.State_monad.
-Require Import Sail.State_lifting.
-Require Import stdpp.unstable.bitvector_tactics.
+Require Import SailStdpp.Base.
+Require Import RV64.riscv_types.
 Require Import isla.sail_riscv.sail_opsem.
+Import Interface.
 
 Arguments read_accessor : simpl nomatch.
 
@@ -78,7 +77,6 @@ Ltac reduce_closed_sim :=
    | |- context [@subrange_vec_dec ?n ?a ?b ?c] => progress reduce_closed (@subrange_vec_dec n a b c)
    | |- context [@access_vec_dec ?n ?w ?m] => progress reduce_closed (@access_vec_dec n w m)
    | |- context [vec_of_bits ?l] => progress reduce_closed (vec_of_bits l)
-   | |- context [Word.weqb ?b1 ?b2] => progress reduce_closed (Word.weqb b1 b2)
    | |- context [@eq_vec ?n ?b1 ?b2] => progress reduce_closed (@eq_vec n b1 b2)
    | |- context [eq_bit ?b1 ?b2] => progress reduce_closed (eq_bit b1 b2)
    (* | |- context [cast_unit_vec ?b] => progress reduce_closed (cast_unit_vec b) *)
@@ -90,8 +88,6 @@ Ltac reduce_closed_sim :=
    | |- context [Z.geb ?n1 ?n2] => progress reduce_closed (Z.geb n1 n2)
    | |- context [Z.eqb ?n1 ?n2] => progress reduce_closed (Z.eqb n1 n2)
    | |- context [neq_int ?n1 ?n2] => progress reduce_closed (neq_int n1 n2)
-   | |- context [size_bits_backwards_matches ?n] => progress reduce_closed (size_bits_backwards_matches n)
-   | |- context [size_bits_backwards ?n] => progress reduce_closed (size_bits_backwards n)
    | |- context [bool_bits_backwards_matches ?n] => progress reduce_closed (bool_bits_backwards_matches n)
    | |- context [bool_bits_backwards ?n] => progress reduce_closed (bool_bits_backwards n)
    | |- context [amo_width_valid ?n] => progress reduce_closed (amo_width_valid n)
@@ -119,29 +115,23 @@ Ltac reduce_closed_sim :=
 Ltac cbn_sim :=
   cbn [returnM returnm bind bind0 sim_regs
        x1_ref x2_ref x9_ref x10_ref x11_ref x12_ref misa_ref mstatus_ref PC_ref nextPC_ref cur_privilege_ref
-       regval_of of_regval read_from write_to regval_from_reg
-       Misa_of_regval regval_of_Misa
+       regval_from_reg
        read_kind_of_flags
        ext_control_check_pc
        bitU_of_bool bool_of_bitU bit_to_bool
        extend_value MemoryOpResult_drop_meta
        negb sumbool_of_bool set
-       projT1 build_ex __id andb orb
+       __id andb orb
        _rec_execute compressed_measure Zwf_guarded
        subst_trace subst_val_event subst_val_valu subst_val_smt subst_val_exp subst_val_base_val fmap list_fmap eq_var_name Z.eqb Pos.eqb map
     ].
 
-Create HintDb simpl_regs_rewrite.
-#[export]
-Hint Rewrite x1_nextPC x2_nextPC x10_nextPC nextPC_x10 x11_nextPC nextPC_x11
-  x12_nextPC nextPC_x12 x13_nextPC nextPC_x13 mstatus_nextPC misa_nextPC
-  cur_privilege_nextPC PC_nextPC nextPC_nextPC : simpl_regs_rewrite.
 Ltac sim_simpl_regs :=
-  autorewrite with simpl_regs_rewrite.
-
-(* Create HintDb mword_to_bv_rewrite. *)
-(* #[export] *)
-(* Hint Rewrite @mword_to_bv_add_vec using done : mword_to_bv_rewrite. *)
+  repeat match goal with
+      |- context [register_lookup ?r1 (register_set ?r2 _ _)] =>
+        first [unify r1 r2; rewrite register_lookup_set
+              | rewrite irrelevant_register_set; [|done]]
+    end.
 
 Ltac shelve_types :=
   lazymatch goal with
@@ -152,7 +142,7 @@ Ltac shelve_types :=
       end
   end.
 Ltac sim_simpl_goal :=
-  shelve_types; simpl; sim_simpl_regs;
+  shelve_types; unfold register_value_to_valu; simpl; sim_simpl_regs;
   repeat lazymatch goal with
          | |- Some ?a = Some ?b => apply f_equal_help; [done|]
          | |- Val_Bool ?a = Val_Bool ?b => apply f_equal_help; [done|]
@@ -183,36 +173,27 @@ Ltac sim_simpl_hyp H :=
   try apply bool_decide_eq_false_1 in H;
   try (apply Eqdep_dec.inj_pair2_eq_dec in H; [|by move => ??; apply decide; apply _]).
 
-
-Lemma of_regval_regval_of_mstatus a :
- Mstatus_of_regval (regval_of_Mstatus a) = Some a.
-Proof. by destruct a. Qed.
-Lemma of_regval_regval_of_misa a :
- Misa_of_regval (regval_of_Misa a) = Some a.
-Proof. by destruct a. Qed.
-
-Ltac solve_of_regval_regval_of :=
-  match goal with
-  (* some goals of this form contain eta expansions that done cannot
-  solve, so we have to manually apply a lemma *)
-  | _ =>
-      by apply of_regval_regval_of_mstatus
-  | _ =>
-      by apply of_regval_regval_of_misa
-  | _ => done
-  end.
-
 Ltac red_monad_sim :=
   repeat match goal with
+         | |- sim _ (throw _ >>= _) (BindMCtx _ _) _  => apply sim_pop_binds_throw
+         | |- sim _ (throw _ >>= _) (TryMCtx _ _) _  => apply sim_pop_try_throw_bind
+         | |- sim _ (early_return _ >>= _) (BindMCtx _ _) _  => apply sim_pop_binds_throw
+         | |- sim _ (early_return _ >>= _) (TryMCtx _ _) _  => apply sim_pop_try_throw_bind
+
          | |- sim _ (_ >>= _) _ _  => apply sim_bind
          | |- sim _ (_ >> _) _ _  => apply sim_bind
+         (* Also cope with stdpp bind, because I used it in step_cpu *)
+         | |- sim _ (_ ≫= _) _ _  => apply sim_bind
          | |- sim _ (and_boolM _ _) _ _  => apply sim_bind
-         | |- sim _ (and_boolMP _ _) _ _  => apply sim_bind
-         | |- sim _ (projT1_m _) _ _  => apply sim_bind
-         | |- sim _ (build_trivial_ex _) _ _  => apply sim_bind
          | |- sim _ (try_catch _ _) _ _  => apply sim_try_catch
-         | |- sim _ (Done _) (BindMCtx _ _) _  => apply sim_pop_bind_Done
-         | |- sim _ (Done _) (TryMCtx _ _) _  => apply sim_pop_try_Done
+         | |- sim _ (catch_early_return _) _ _  => apply sim_try_catch
+         | |- sim _ (liftR _) _ _  => apply sim_try_catch
+         | |- sim _ (Ret _) (BindMCtx _ _) _  => apply sim_pop_bind_Done
+         | |- sim _ (Ret _) (TryMCtx _ _) _  => apply sim_pop_try_Done
+         | |- sim _ (throw _) (BindMCtx _ _) _  => apply sim_pop_bind_throw
+         | |- sim _ (throw _) (TryMCtx _ _) _  => apply sim_pop_try_throw
+         | |- sim _ (early_return _) (BindMCtx _ _) _  => apply sim_pop_bind_throw
+         | |- sim _ (early_return _) (TryMCtx _ _) _  => apply sim_pop_try_throw
          | |- sim _ (assert_exp' _ _) _ _  => apply sim_assert_exp';
               [try done; shelve| let H := fresh in move => H; try clear H]
          | |- sim _ _ _ (Smt (DeclareConst _ Ty_Bool) _:t:_)  => apply: sim_DeclareConstBool
@@ -231,23 +212,24 @@ Ltac red_monad_sim :=
          | |- sim _ _ _ (AssumeReg _ _ _ _:t:_)  =>
              let H := fresh "Hassume" in apply: sim_AssumeReg => H; simpl in H; sim_simpl_hyp H
          | |- sim _ _ _ (ReadReg _ _ _ _:t:_)  => apply: sim_ReadReg_config; [reflexivity | try done; shelve|]
-         | |- sim _ (read_reg _) _ (ReadReg _ _ _ _:t:_)  => apply: sim_read_reg; [done | solve_of_regval_regval_of | try done; shelve|]
-         | |- sim _ (write_reg nextPC_ref _) _ _  => apply: sim_write_reg_private; [done..|]
-         | |- sim _ (read_reg nextPC_ref) _ _  => apply: sim_read_reg_l; [done..|]
+         | |- sim _ (read_reg _) _ (ReadReg _ _ _ _:t:_)  => apply: sim_read_reg; [try done; shelve|]
+         (* NB: register names are coercions, so to match nextPC we need to use (_ nextPC) *)
+         | |- sim _ (write_reg (_ nextPC) _) _ _  => apply: sim_write_reg_private; [done..|]
+         | |- sim _ (read_reg (_ nextPC)) _ _  => apply: sim_read_reg_l; [done..|]
          | |- sim _ (get_next_pc ()) _ _  => apply: sim_read_reg_l; [done..|]
-         | |- sim _ (write_reg _ _) _ (WriteReg _ _ _ _:t:_)  => apply: sim_write_reg; [done | done | shelve |]
-         | |- sim _ (Write_ea _ _ _ _) _ _  => apply: sim_Write_ea
-         | |- sim _ (Prompt_monad.write_mem _ _ _ _ _) _ (WriteMem _ _ _ _ _ _ _ :t:_)  => apply sim_write_mem; [done|done|done|shelve|shelve|]
-         | |- sim _ (Prompt_monad.read_mem _ _ _ _) _ (Smt (DeclareConst _ (Ty_BitVec _)) _:t:ReadMem _ _ _ _ _ _ :t:_) =>
-             apply sim_read_mem; [done|done|shelve|] => ?? ->
-         | |- sim _ (Done _) NilMCtx tnil  => apply: sim_done
+         | |- sim _ (write_reg _ _) _ (WriteReg _ _ _ _:t:_)  => apply: sim_write_reg; [shelve |]
+         (*| |- sim _ (Write_ea _ _ _ _) _ _  => apply: sim_Write_ea*)
+         | |- sim _ (sail_mem_write _) _ (WriteMem _ _ _ _ _ _ _ :t:_)  => apply: sim_write_mem; [done..|shelve|]
+         | |- sim _ (sail_mem_read _) _ (Smt (DeclareConst _ (Ty_BitVec _)) _:t:ReadMem _ _ _ _ _ _ :t:_) =>
+             apply sim_read_mem; [done..|shelve|] => ?? ->
+         | |- sim _ (Ret _) NilMCtx tnil  => apply: sim_done
          end.
 
 
 Ltac unfold_sim :=
   unfold wX_bits, rX_bits, rX, wX, set_next_pc, regval_from_reg, regval_into_reg, returnM, returnm, set, ext_data_get_addr,
     mem_write_ea, write_ram_ea, write_mem_ea, phys_mem_write, write_ram, phys_mem_read, read_ram, process_load,
-    mem_write_value_priv_meta, pmp_mem_write, checked_mem_write, mem_read_priv, mem_read_priv_meta, pmp_mem_read,
+    mem_write_value_priv_meta, checked_mem_write, mem_read_priv, mem_read_priv_meta,
     checked_mem_read.
 
 
@@ -287,7 +269,9 @@ Proof.
   rewrite /within_mmio_writable/within_clint/within_htif_writable. apply orb_false_intro.
   - apply andb_false_iff. rewrite !Z.leb_gt. by rewrite /= !uint_plain_to_bv_unsigned.
   - rewrite andb_false_iff orb_false_iff andb_false_iff /= Z.eqb_neq !Z.leb_gt.
-    by rewrite !(eq_vec_to_bv 64) // !bool_decide_eq_false !bv_neq mword_to_bv_add_vec.
+    rewrite !(eq_vec_to_bv 64) // !bool_decide_eq_false !bv_neq.
+    unfold add_vec_int. change add_vec with (@bv_add 64).
+    rewrite bv_add_unsigned. exact Helf.
 Qed.
 
 Lemma within_phys_mem_true b w z:
@@ -304,27 +288,28 @@ Qed.
 
 
 Lemma sim_haveFExt Σ K e2:
-  (∀ b, sim Σ (Done b) K e2) →
+  (∀ b, sim Σ (Ret b) K e2) →
   sim Σ (haveFExt ()) K e2.
 Proof.
   move => Hsim.
   unfold haveFExt. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|].
+  apply: sim_read_reg_l.
   red_sim. case_match => //. red_sim.
-  apply sim_read_reg_l; [solve_of_regval_regval_of|].
+  apply sim_read_reg_l.
   by red_sim.
 Qed.
 
 Lemma sim_haveDExt Σ K e2:
-  (∀ b, sim Σ (Done b) K e2) →
+  (∀ b, sim Σ (Ret b) K e2) →
   sim Σ (haveDExt ()) K e2.
 Proof.
   move => Hsim.
   unfold haveDExt. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|].
+  apply: sim_read_reg_l.
   red_sim. case_match => //. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|].
-  by red_sim.
+  apply: sim_read_reg_l.
+  red_sim.
+  by case_match => //.
 Qed.
 
 Lemma bv_extract_17_1_and (b : bv 64):
@@ -333,13 +318,25 @@ Lemma bv_extract_17_1_and (b : bv 64):
 Proof. move => Hb. bv_simplify. bitblast as n. bv_simplify Hb. by bitblast Hb with (n + 17). Qed.
 
 Lemma sim_effectivePrivilege Σ K t m priv e2:
-  bv_and (mword_to_bv (n2:=64) (Mstatus_bits m)) (BV 64 0x20000) = (BV 64 0) →
-  sim Σ (Done priv) K e2 →
+  bv_and (mword_to_bv m) (BV 64 0x20000) = (BV 64 0) →
+  sim Σ (Ret priv) K e2 →
   sim Σ (effectivePrivilege t m priv) K e2.
 Proof.
   move => Hm Hsim.
   unfold effectivePrivilege.
   destruct t as [[]|[]|[[] []]|[]]; red_sim => //; rewrite if_false //.
-  all: unfold _get_Mstatus_MPRV; rewrite (eq_vec_to_bv 1); [|done].
-  all: by rewrite (mword_to_bv_subrange_vec_dec 17 17 64) // bv_extract_17_1_and.
+  all: unfold _get_Mstatus_MPRV; rewrite (eq_vec_to_bv 1).
+  all: by rewrite /subrange_vec_dec/= autocast_refl /MachineWord.slice/get_word bv_extract_17_1_and.
 Qed.
+
+Ltac normalize_regs :=
+  repeat
+    match goal with
+    | H : context [@register_lookup ?T _ _] |- _ => let T' := eval compute in T in progress change T with T' in H
+    | |- context [@register_lookup ?T _ _] => let T' := eval compute in T in progress change T with T'
+    end.
+
+Ltac generalize_regs :=
+  (* First, normalize the types so that all reads of the same register are identical *)
+  normalize_regs;
+  match goal with |- context [@register_lookup ?T ?r ?regs] => generalize dependent (@register_lookup T r regs) end.

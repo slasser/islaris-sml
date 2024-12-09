@@ -63,7 +63,6 @@ Definition misa_bits : bv 64 :=
   (BV 64 0x800000000015312d).
 
 Definition sys_regs : list (reg_kind * valu_shape) := [
-  (KindReg "rv_enable_pmp" , ExactShape (RVal_Bool false));
   (KindReg "rv_enable_misaligned_access" , ExactShape (RVal_Bool false));
   (KindReg "rv_ram_base" , ExactShape (RVal_Bits (BV 64 0x0000000080000000)));
   (KindReg "rv_ram_size" , ExactShape (RVal_Bits (BV 64 0x0000000004000000)));
@@ -83,7 +82,6 @@ Definition sys_regs : list (reg_kind * valu_shape) := [
 ].
 
 Definition sys_regs_map (mstatus_bits satp : bv 64) : reg_map :=
-  <[ "rv_enable_pmp" := RVal_Bool false ]> $
   <[ "rv_enable_misaligned_access" := RVal_Bool false ]> $
   <[ "rv_ram_base" := RVal_Bits (BV 64 0x0000000080000000) ]> $
   <[ "rv_ram_size" := RVal_Bits (BV 64 0x0000000004000000) ]> $

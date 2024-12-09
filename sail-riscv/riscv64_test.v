@@ -53,15 +53,18 @@
 (* Exceptions to this license are detailed in THIRD_PARTY_FILES.md          *)
 (****************************************************************************)
 
-Require Import Sail.Base.
-Require Import Sail.State_monad.
-Require Import Sail.State_lifting.
+Require Import SailStdpp.Base.
+Require Import SailStdpp.State_monad.
+Require Import SailStdpp.State_lifting.
 Require Import isla.sail_riscv.sail_opsem.
 Require Import isla.sail_riscv.tactics.
 Require Import isla.automation.
 Require Import isla.riscv64.riscv64.
 From isla.instructions.riscv64_test Require Import instrs.
 Require Import isla.examples.riscv64_test.
+
+(* Deal with unification problem; upstream to stdpp *)
+Global Hint Extern 10 (BvUnfold _ _ _ (@BV _ _ _) _) => apply bv_unfold_BV : bv_unfold_db.
 
 Lemma sim_instr_a0:
   sim_instr (Uncompressed (BV 32 0x00000513)) a0.
@@ -70,7 +73,7 @@ Proof.
   red_sim. unfold execute. red_sim.
   unfold execute_ITYPE. red_sim.
   Unshelve. all: sim_simpl_goal.
-  - rewrite mword_to_bv_add_vec //.
+  - by apply bv_eq.
 Qed.
 
 Lemma sim_instr_a4:
@@ -79,36 +82,36 @@ Proof.
   move => regs. unfold step_cpu, a4. red_sim. unfold execute. red_sim.
   unfold execute_ITYPE. red_sim.
   Unshelve. all: sim_simpl_goal.
-  all: rewrite mword_to_bv_add_vec //.
 Qed.
 
 Lemma sim_instr_a8:
   sim_instr (Uncompressed (BV 32 0x00b13423)) a8.
 Proof.
   move => regs. unfold step_cpu, a8. red_sim. unfold execute. red_sim.
-  unfold execute_STORE. red_sim. rewrite x2_nextPC.
+  unfold execute_STORE. red_sim. sim_simpl_regs.
   rewrite if_false; [|shelve]. red_sim.
-  unfold translateAddr. red_sim. rewrite mstatus_nextPC.
+  unfold translateAddr. red_sim. sim_simpl_regs.
   apply sim_effectivePrivilege; [done|]. red_sim.
-  unfold translateAddr_priv. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|]. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|]. red_sim.
-  unfold translationMode. rewrite cur_privilege_nextPC.
-  have -> : (cur_privilege regs) = Machine by destruct (cur_privilege regs). red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|]. red_sim. rewrite x11_nextPC.
+  unfold translationMode. sim_simpl_regs.
+  have -> : (register_lookup cur_privilege regs) = Machine by destruct (register_lookup cur_privilege regs).
+  unfold write_kind_of_flags. red_sim.
   unfold mem_write_value, mem_write_value_meta. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|]. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|]. red_sim. rewrite mstatus_nextPC.
+  apply: sim_read_reg_l. red_sim.
+  apply: sim_read_reg_l. red_sim. sim_simpl_regs.
   apply sim_effectivePrivilege; [done|]. red_sim.
+  unfold phys_access_check.
   rewrite Hassume. red_sim.
   rewrite if_false; [|shelve]. rewrite if_true; [|shelve]. red_sim.
+  unfold write_kind_of_flags. red_sim.
+  unfold ext_check_phys_mem_write. red_sim.
   Unshelve. all: sim_simpl_goal.
-  all: rewrite -?Hassume1 -?Hassume2 -?Hassume3 -?Hassume4 -?Hassume5 -?Hassume6 -?Hassume7 //.
   - apply check_misaligned_false. rewrite mword_to_bv_add_vec; [|done]. reduce_closed_mword_to_bv.
     by rewrite bv_extract_0_bv_add_distr // Hassume11.
+  - by rewrite Hassume.
   - eapply within_mmio_writable_false.
     + rewrite mword_to_bv_add_vec; [|done]. reduce_closed_mword_to_bv. done.
     + rewrite ->Hassume1, Hassume2, Hassume5, Hassume6, Hassume7, !bv_add_unsigned, !bv_unsigned_BV in *.
+      rewrite /regtype/xlenbits/bits.
       lia.
   - eapply within_phys_mem_true.
     + rewrite mword_to_bv_add_vec; [|done]. reduce_closed_mword_to_bv. done.
@@ -117,10 +120,9 @@ Proof.
       unfold bv_wrap, bv_modulus in *.
       (* TODO: Why is this necessary? *)
       change (2 + 1 - 0)%N with (3%N).
+      rewrite /regtype/xlenbits/bits.
       lia.
-  - by rewrite mword_to_bv_add_vec.
-  - by rewrite mword_to_bv_add_vec.
-    Unshelve. all: exact: inhabitant.
+  Unshelve. all: exact: inhabitant.
 Qed.
 
 Lemma sim_instr_ac:
@@ -129,23 +131,22 @@ Proof.
   move => regs. unfold step_cpu, ac. red_sim. unfold execute. red_sim.
   unfold execute_LOAD. red_sim.
   rewrite if_false; [|shelve]. red_sim.
-  unfold translateAddr. red_sim. rewrite mstatus_nextPC.
+  unfold translateAddr. red_sim. sim_simpl_regs.
   apply sim_effectivePrivilege; [done|]. red_sim.
-  unfold translateAddr_priv. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|]. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|]. red_sim.
-  unfold translationMode. rewrite cur_privilege_nextPC.
-  have -> : (cur_privilege regs) = Machine by destruct (cur_privilege regs). red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|]. red_sim. rewrite x2_nextPC.
+  unfold translationMode. sim_simpl_regs.
+  have -> : (register_lookup cur_privilege regs) = Machine by destruct (register_lookup cur_privilege regs). red_sim.
   unfold mem_read. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|]. red_sim.
-  apply: sim_read_reg_l; [solve_of_regval_regval_of|]. red_sim. rewrite mstatus_nextPC.
+  apply: sim_read_reg_l. red_sim.
+  apply: sim_read_reg_l. red_sim. sim_simpl_regs.
   apply sim_effectivePrivilege; [done|]. red_sim.
+  unfold phys_access_check.
   rewrite Hassume. red_sim.
   rewrite if_false; [|shelve]. rewrite if_true; [|shelve]. red_sim.
   Unshelve. all: sim_simpl_goal.
+  all: rewrite /regtype/xlenbits/bits.
   - apply check_misaligned_false. rewrite mword_to_bv_add_vec; [|done]. reduce_closed_mword_to_bv.
     by rewrite bv_extract_0_bv_add_distr // Hassume11.
+  - rewrite Hassume //.
   - eapply within_mmio_writable_false.
     + rewrite mword_to_bv_add_vec; [|done]. reduce_closed_mword_to_bv. done.
     + rewrite ->Hassume1, Hassume2, Hassume5, Hassume6, Hassume7, !bv_add_unsigned, !bv_unsigned_BV in *.
@@ -158,10 +159,7 @@ Proof.
       (* TODO: Why is this necessary? *)
       change (2 + 1 - 0)%N with (3%N).
       lia.
-  - by rewrite mword_to_bv_add_vec.
-  - rewrite mword_to_bv_sign_extend' // mword_to_bv_to_mword //.
-  - by rewrite mword_to_bv_add_vec.
-    Unshelve. all: exact: inhabitant.
+  Unshelve. all: exact: inhabitant.
 Qed.
 
 Lemma sim_instr_a10:
@@ -169,21 +167,17 @@ Lemma sim_instr_a10:
 Proof.
   move => regs. unfold step_cpu, a10. red_sim. unfold execute; red_sim.
   unfold execute_BTYPE; red_sim.
-  apply: sim_read_reg_l; [done|]; red_sim.
-  rewrite x10_nextPC x11_nextPC.
-  destruct (eq_vec (x10 regs) (x11 regs)) eqn: Hb1; sim_simpl_hyp Hb1.
+  apply: sim_read_reg_l; red_sim.
+  sim_simpl_regs.
+  destruct (eq_vec (@register_lookup regtype x10 regs) (@register_lookup regtype x11 regs)) eqn: Hb1; sim_simpl_hyp Hb1.
   - apply: (sim_tcases 0); [done|]. red_sim.
     rewrite bit_to_bool_false; [|shelve]. red_sim.
   - apply: (sim_tcases 1); [done|]. red_sim.
   Unshelve. all: sim_simpl_goal.
-  + rewrite (eq_vec_to_bv 64) // bool_decide_eq_true in Hb1. by rewrite Hb1.
   + rewrite access_vec_dec_to_bv // bitU_of_bool_B0 //.
     rewrite mword_to_bv_add_vec //=. reduce_closed_mword_to_bv.
     bv_simplify. rename select (bv_extract 1 _ _ = _) into He. bv_simplify He.
     bitblast. by bitblast He with 0.
-  + rewrite mword_to_bv_add_vec //.
-  + rewrite (eq_vec_to_bv 64) // bool_decide_eq_false in Hb1. done.
-  + rewrite mword_to_bv_add_vec //.
 Qed.
 
 Definition riscv_test_sail_instrs : gmap addr encoded_instruction :=
@@ -195,10 +189,10 @@ Definition riscv_test_sail_instrs : gmap addr encoded_instruction :=
   ∅.
 
 Definition riscv_test_initial_sail_state (x2v : bv 64) (regs : regstate) : sail_state :=
-  SAIL (Done tt) regs (riscv_test_state_global x2v).(seq_mem) riscv_test_sail_instrs false.
+  SAIL (Interface.Ret tt) regs (riscv_test_state_global x2v).(seq_mem) riscv_test_sail_instrs false.
 
 Lemma riscv_test_safe regs (satpv x10v x2v mstatus_bits x11v : bv 64):
-  plat_enable_pmp () = false →
+  sys_pmp_count () = 0 →
   plat_enable_misaligned_access () = false →
   mword_to_bv (plat_ram_base ()) = (BV 64 0x0000000080000000) →
   mword_to_bv (plat_ram_size ()) = (BV 64 0x0000000004000000) →
@@ -211,18 +205,18 @@ Lemma riscv_test_safe regs (satpv x10v x2v mstatus_bits x11v : bv 64):
   bv_unsigned x2v `mod` 8 = 0 →
   bv_unsigned x2v + 16 < 2 ^ 64 →
   0x0000000080000000 ≤ bv_unsigned x2v + 8 < 0x0000000080000000 + 0x0000000004000000 →
-  PC regs = bv_to_mword (BV 64 0x0000000010300000) →
-  x2 regs = bv_to_mword x2v →
-  x10 regs = bv_to_mword x10v →
-  x11 regs = bv_to_mword x11v →
-  satp regs = bv_to_mword satpv →
-  cur_privilege regs = Machine →
-  misa regs = {| Misa_bits := bv_to_mword misa_bits |} →
-  mstatus regs = {| Mstatus_bits := bv_to_mword mstatus_bits |} →
+  register_lookup PC regs = bv_to_mword (BV 64 0x0000000010300000) →
+  register_lookup x2 regs = bv_to_mword x2v →
+  register_lookup x10 regs = bv_to_mword x10v →
+  register_lookup x11 regs = bv_to_mword x11v →
+  register_lookup satp regs = bv_to_mword satpv →
+  register_lookup cur_privilege regs = Machine →
+  register_lookup misa regs = misa_bits →
+  register_lookup mstatus regs = mstatus_bits →
   safe sail_module (riscv_test_initial_sail_state x2v regs) ∧
     (∀ κs σ', steps sail_module (riscv_test_initial_sail_state x2v regs) κs σ' → riscv_test_spec x11v κs).
 Proof.
-  move => ?????????? ??? HPC Hx2 Hx10 Hx11 Hsatp Hcur_priv Hmisa Hmstatus.
+  move => Hpmp ????????? ??? HPC Hx2 Hx10 Hx11 Hsatp Hcur_priv Hmisa Hmstatus.
   apply: iris_transfer_refines.
   { apply iris_module_wf_isla_lang. }
   { move => ????. by apply (riscv_test_adequate mstatus_bits satpv x2v x10v x11v). }
@@ -230,15 +224,9 @@ Proof.
   - rewrite !dom_insert_L !dom_empty_L. set_solver.
   - move => ??.
     repeat move => /lookup_insert_Some[[??]|[? ]]; simplify_map_eq => //.
-    all: unfold get_regval_or_config; simpl; eexists _; split; [done|]; sim_simpl_goal.
-    + by rewrite HPC.
-    + by rewrite Hx2 mword_to_bv_to_mword.
-    + by rewrite Hx10 mword_to_bv_to_mword.
-    + by rewrite Hx11 mword_to_bv_to_mword.
+    all: unfold get_regval_or_config; simpl; sim_simpl_goal.
+    + by rewrite Hpmp.
     + by rewrite Hcur_priv.
-    + by rewrite Hmisa.
-    + by rewrite Hmstatus mword_to_bv_to_mword.
-    + by rewrite Hsatp mword_to_bv_to_mword.
   - done.
   - unfold riscv_test_sail_instrs. move => ??? Hsail.
     repeat move => /lookup_insert_Some[[??]|[? ]]; simplify_map_eq.
