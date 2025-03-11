@@ -114,10 +114,17 @@ Lemma memcpy_loop `{!islaG Σ} `{!threadG} :
   instr 0x0000000010300010 (Some a10) -∗
   instr 0x0000000010300014 (Some a14) -∗
   instr 0x0000000010300018 (Some a18) -∗
-  □ instr_pre 0x0000000010300008 memcpy_loop_spec -∗
+  (* □ instr_pre 0x0000000010300008 memcpy_loop_spec -∗ *)
   instr_body 0x0000000010300008 memcpy_loop_spec.
 Proof.
 (*PROOF_START*)
+  iStartProof.
+  iIntros "#H1 #H2 #H3 #H4 #H5".
+  iLöb as "IH".
+  iDestruct (instr_pre_to_body with "IH") as "#Hpre".
+  iClear "IH".
+  iRevert "H1 H2 H3 H4 H5 Hpre".
+  iStopProof.
   iStartProof.
   liARun.
 
