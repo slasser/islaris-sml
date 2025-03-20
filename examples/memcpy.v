@@ -190,3 +190,89 @@ Proof.
   - bv_simplify select (n ≠ _). bv_solve.
 (*PROOF_END*)
 Time Qed.
+
+(* Replace □ instr_pre with instr_body, which the edit to memcpy_loop above suggests we can do. *)
+Lemma memcpy__instr_body `{!islaG Σ} `{!threadG} :
+  instr 0x0000000010300000 (Some a0) -∗
+  instr 0x0000000010300004 (Some a4) -∗
+  instr 0x000000001030001c (Some a1c) -∗
+  (*  □ instr_pre 0x0000000010300008 memcpy_loop_spec -∗ *)
+  instr_body 0x0000000010300008 memcpy_loop_spec -∗
+(*SPEC_START*)
+  instr_body 0x0000000010300000 (
+    ∃ (tmp1 tmp2 src dst n ret : bv 64) (srcdata dstdata : list byte),
+    reg_col sys_regs ∗
+    reg_col CNVZ_regs ∗
+    "R0" ↦ᵣ RVal_Bits dst ∗ "R1" ↦ᵣ RVal_Bits src ∗ "R2" ↦ᵣ RVal_Bits n ∗
+    "R3" ↦ᵣ RVal_Bits tmp2 ∗ "R4" ↦ᵣ RVal_Bits tmp1 ∗
+    "R30" ↦ᵣ RVal_Bits ret ∗
+    bv_unsigned src ↦ₘ∗ srcdata ∗ bv_unsigned dst ↦ₘ∗ dstdata ∗
+    ⌜bv_unsigned n = length srcdata⌝ ∗ ⌜bv_unsigned n = length dstdata⌝ ∗
+    ⌜bv_unsigned src + bv_unsigned n < 2 ^ 52⌝ ∗
+    ⌜bv_unsigned dst + bv_unsigned n < 2 ^ 52⌝ ∗
+    instr_pre (bv_unsigned ret) (
+    ∃ (tmp1 tmp2 n : bv 64),
+      reg_col sys_regs ∗
+      reg_col CNVZ_regs ∗
+      "R0" ↦ᵣ RVal_Bits dst ∗ "R1" ↦ᵣ RVal_Bits src ∗ "R2" ↦ᵣ RVal_Bits n ∗
+      "R3" ↦ᵣ RVal_Bits tmp2 ∗ "R4" ↦ᵣ RVal_Bits tmp1 ∗
+      "R30" ↦ᵣ RVal_Bits ret ∗
+      bv_unsigned src ↦ₘ∗ srcdata ∗ bv_unsigned dst ↦ₘ∗ srcdata ∗
+      True
+(*SPEC_END*)
+  )).
+Proof.
+  (*PROOF_START*)
+  iStartProof.
+  liARun.
+  Unshelve. all: prepare_sidecond.
+  - by destruct dstdata, srcdata.
+    Unshelve.
+  - bv_simplify select (n ≠ _). bv_solve.
+(*PROOF_END*)
+Time Qed.
+
+(* Prove the main memcpy correctness property in a way that uses the memcpy_loop lemma. *)
+Lemma memcpy__using_loop_invariant `{!islaG Σ} `{!threadG} :
+  instr 0x0000000010300000 (Some a0) -∗
+  instr 0x0000000010300004 (Some a4) -∗
+  instr 0x0000000010300008 (Some a8) -∗
+  instr 0x000000001030000c (Some ac) -∗
+  instr 0x0000000010300010 (Some a10) -∗
+  instr 0x0000000010300014 (Some a14) -∗
+  instr 0x0000000010300018 (Some a18) -∗
+  instr 0x000000001030001c (Some a1c) -∗
+  (*SPEC_START*)
+  instr_body 0x0000000010300000 (
+    ∃ (tmp1 tmp2 src dst n ret : bv 64) (srcdata dstdata : list byte),
+    reg_col sys_regs ∗
+    reg_col CNVZ_regs ∗
+    "R0" ↦ᵣ RVal_Bits dst ∗ "R1" ↦ᵣ RVal_Bits src ∗ "R2" ↦ᵣ RVal_Bits n ∗
+    "R3" ↦ᵣ RVal_Bits tmp2 ∗ "R4" ↦ᵣ RVal_Bits tmp1 ∗
+    "R30" ↦ᵣ RVal_Bits ret ∗
+    bv_unsigned src ↦ₘ∗ srcdata ∗ bv_unsigned dst ↦ₘ∗ dstdata ∗
+    ⌜bv_unsigned n = length srcdata⌝ ∗ ⌜bv_unsigned n = length dstdata⌝ ∗
+    ⌜bv_unsigned src + bv_unsigned n < 2 ^ 52⌝ ∗
+    ⌜bv_unsigned dst + bv_unsigned n < 2 ^ 52⌝ ∗
+    instr_pre (bv_unsigned ret) (
+    ∃ (tmp1 tmp2 n : bv 64),
+      reg_col sys_regs ∗
+      reg_col CNVZ_regs ∗
+      "R0" ↦ᵣ RVal_Bits dst ∗ "R1" ↦ᵣ RVal_Bits src ∗ "R2" ↦ᵣ RVal_Bits n ∗
+      "R3" ↦ᵣ RVal_Bits tmp2 ∗ "R4" ↦ᵣ RVal_Bits tmp1 ∗
+      "R30" ↦ᵣ RVal_Bits ret ∗
+      bv_unsigned src ↦ₘ∗ srcdata ∗ bv_unsigned dst ↦ₘ∗ srcdata ∗
+      True
+  (*SPEC_END*)
+  )).
+Proof.
+  (*PROOF_START*)
+  iStartProof.
+  iIntros "#H1 #H2 #H3 #H4 #H5 #H6 #H7 #H8".
+  iPoseProof (memcpy_loop with "H3 H4 H5 H6 H7") as "Hloop".
+  liARun.
+  Unshelve. all: prepare_sidecond.
+  - by destruct dstdata, srcdata.
+  - bv_simplify select (n ≠ _). bv_solve.
+(*PROOF_END*)
+Time Qed.
